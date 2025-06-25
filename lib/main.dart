@@ -35,7 +35,7 @@ class FeedbackApp extends StatelessWidget {
             color: Colors.white,
           ),
         ),
-        cardTheme: CardTheme(
+        cardTheme: CardThemeData(
           elevation: 1,
           margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
           shape: RoundedRectangleBorder(
