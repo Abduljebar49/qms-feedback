@@ -6,6 +6,8 @@ void main() {
   runApp(const FeedbackApp());
   // Set preferred orientations
   SystemChrome.setPreferredOrientations([
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);

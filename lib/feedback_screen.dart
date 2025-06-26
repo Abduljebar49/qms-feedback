@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:qms_feedback/constants.dart';
 import 'package:qms_feedback/department.dart';
 
 class FeedbackHomePage extends StatefulWidget {
@@ -28,37 +29,38 @@ class _FeedbackHomePageState extends State<FeedbackHomePage> {
 
   @override
   void dispose() {
-    _refreshTimer?.cancel(); // Cancel the timer when widget is disposed
+    _refreshTimer?.cancel();
     super.dispose();
   }
 
   void _startAutoRefresh() {
-    _refreshTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
-      if (mounted) {
-        setState(() {
-          _loadData();
-        });
+    _refreshTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      if (mounted && !_isLoading) {
+        _loadData();
       }
     });
   }
 
   void _loadData() {
-    setState(() {
-      _completedServicesFuture = _fetchCompletedServices(widget.department.id);
-    });
+    if (mounted) {
+      setState(() {
+        _completedServicesFuture = _fetchCompletedServices(
+          widget.department.id,
+        );
+      });
+    }
   }
 
   Future<List<CompletedService>> _fetchCompletedServices(
     int departmentId,
   ) async {
-    setState(() => _isLoading = true);
+    if (!_isLoading) {
+      setState(() => _isLoading = true);
+    }
+
     try {
       final response = await http
-          .get(
-            Uri.parse(
-              'https://qms.debbal.com/api/departments/$departmentId/feedback-tokens',
-            ),
-          )
+          .get(Uri.parse('$baseUrl/departments/$departmentId/feedback-tokens'))
           .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
@@ -84,7 +86,9 @@ class _FeedbackHomePageState extends State<FeedbackHomePage> {
     } catch (e) {
       throw Exception('Error fetching services: $e');
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -97,7 +101,7 @@ class _FeedbackHomePageState extends State<FeedbackHomePage> {
           // Department header
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
               border: Border(
@@ -128,6 +132,7 @@ class _FeedbackHomePageState extends State<FeedbackHomePage> {
                           : const Icon(Icons.refresh),
                   onPressed: _isLoading ? null : _loadData,
                   tooltip: 'Refresh',
+                  splashRadius: 20,
                 ),
               ],
             ),
@@ -144,7 +149,8 @@ class _FeedbackHomePageState extends State<FeedbackHomePage> {
             child: FutureBuilder<List<CompletedService>>(
               future: _completedServicesFuture,
               builder: (context, snapshot) {
-                if (_isLoading) {
+                if (_isLoading &&
+                    snapshot.connectionState != ConnectionState.done) {
                   return const Center(child: CircularProgressIndicator());
                 } else if (snapshot.hasError) {
                   return Center(
@@ -163,12 +169,7 @@ class _FeedbackHomePageState extends State<FeedbackHomePage> {
                         ),
                         const SizedBox(height: 16),
                         ElevatedButton(
-                          onPressed: () {
-                            setState(() {
-                              _completedServicesFuture =
-                                  _fetchCompletedServices(widget.department.id);
-                            });
-                          },
+                          onPressed: _loadData,
                           child: const Text('Retry'),
                         ),
                       ],
@@ -181,15 +182,18 @@ class _FeedbackHomePageState extends State<FeedbackHomePage> {
                       child: Text('No completed services found'),
                     );
                   }
-                  return ListView.builder(
-                    itemCount: completedServices.length,
-                    itemBuilder: (context, index) {
-                      final service = completedServices[index];
-                      return ServiceCard(
-                        service: service,
-                        onTap: () => _showFeedbackDialog(context, service),
-                      );
-                    },
+                  return RefreshIndicator(
+                    onRefresh: () async => _loadData(),
+                    child: ListView.builder(
+                      itemCount: completedServices.length,
+                      itemBuilder: (context, index) {
+                        final service = completedServices[index];
+                        return ServiceCard(
+                          service: service,
+                          onTap: () => _showFeedbackDialog(context, service),
+                        );
+                      },
+                    ),
                   );
                 } else {
                   return const Center(child: Text('No data available'));
@@ -203,19 +207,12 @@ class _FeedbackHomePageState extends State<FeedbackHomePage> {
   }
 
   Color getColor(num rating) {
-    if (rating == 1) {
-      return Colors.red;
-    } else if (rating == 2) {
-      return Colors.orange;
-    } else if (rating == 3) {
-      return Colors.yellow;
-    } else if (rating == 5) {
-      return Colors.green;
-    } else if (rating == 4) {
-      return Colors.lightGreen;
-    } else {
-      return Colors.grey;
-    }
+    if (rating == 1) return Colors.red;
+    if (rating == 2) return Colors.orange;
+    if (rating == 3) return Colors.yellow;
+    if (rating == 5) return Colors.green;
+    if (rating == 4) return Colors.lightGreen;
+    return Colors.grey;
   }
 
   void _showFeedbackDialog(BuildContext context, CompletedService service) {
@@ -224,50 +221,74 @@ class _FeedbackHomePageState extends State<FeedbackHomePage> {
     bool isSubmitting = false;
 
     Future<void> submitFeedback() async {
-      if (selectedRating == 0) return;
+      if (selectedRating == 0) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Please select a rating')));
+        return;
+      }
 
       setState(() => isSubmitting = true);
+      var message = '';
 
       try {
+        // debugPrint
+
+        final body = json.encode({
+          'rate': selectedRating,
+          'token_number': service.ticketNumber,
+          'comment': commentController.text,
+        });
+        debugPrint('Submitting feedback: $body');
         final response = await http
             .post(
-              Uri.parse('https://qms.debbal.com/api/feedbacks'),
+              Uri.parse('$baseUrl/feedbacks'),
               headers: {'Content-Type': 'application/json'},
-              body: json.encode({
-                'rate': selectedRating,
-                'token_number': service.ticketNumber,
-                'comment': commentController.text,
-              }),
+              body: body,
             )
             .timeout(const Duration(seconds: 10));
 
         if (response.statusCode == 200 || response.statusCode == 201) {
           final responseData = json.decode(response.body);
           if (responseData['success'] == true) {
-            Navigator.pop(context); // Close the dialog
-            _showThankYouMessage(context);
+            if (mounted) {
+              Navigator.pop(context);
+              _showThankYouMessage(context);
+              _loadData(); // Refresh the list after submission
+            }
           } else {
             throw Exception(
               responseData['message'] ?? 'Failed to submit feedback',
             );
           }
         } else {
+          debugPrint(response.body.toString());
           throw Exception('Failed to submit feedback: ${response.statusCode}');
         }
       } on SocketException {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('No internet connection')));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No internet connection')),
+          );
+        }
       } on TimeoutException {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Request timed out')));
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Request timed out')));
+        }
       } catch (e) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+          Navigator.pop(context); // Close the dialog on errors
+        }
       } finally {
-        setState(() => isSubmitting = false);
+        _fetchCompletedServices(widget.department.id);
+        if (mounted) {
+          setState(() => isSubmitting = false);
+        }
       }
     }
 
@@ -364,17 +385,14 @@ class _FeedbackHomePageState extends State<FeedbackHomePage> {
                 vertical: 8,
               ),
               actions: [
-                // Cancel Button - Larger and more touch-friendly
                 SizedBox(
-                  width: 120, // Fixed width for consistent sizing
-                  height:
-                      48, // Minimum touch target size (48x48 is Material guideline)
+                  width: 120,
+                  height: 48,
                   child: TextButton(
                     onPressed:
                         isSubmitting ? null : () => Navigator.pop(context),
                     style: TextButton.styleFrom(
-                      foregroundColor:
-                          Colors.grey[700], // More visible text color
+                      foregroundColor: Colors.grey[700],
                       padding: const EdgeInsets.symmetric(
                         horizontal: 16,
                         vertical: 12,
@@ -392,8 +410,6 @@ class _FeedbackHomePageState extends State<FeedbackHomePage> {
                     ),
                   ),
                 ),
-
-                // Submit Button - More prominent and touch-friendly
                 SizedBox(
                   width: 120,
                   height: 48,
@@ -401,12 +417,9 @@ class _FeedbackHomePageState extends State<FeedbackHomePage> {
                     onPressed:
                         isSubmitting || selectedRating == 0
                             ? null
-                            : () async {
-                              await submitFeedback();
-                            },
+                            : submitFeedback,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor:
-                          Theme.of(context).primaryColor, // More vibrant color
+                      backgroundColor: Theme.of(context).primaryColor,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 16,
@@ -415,7 +428,7 @@ class _FeedbackHomePageState extends State<FeedbackHomePage> {
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      elevation: 2, // Slight shadow for depth
+                      elevation: 2,
                     ),
                     child:
                         isSubmitting
@@ -450,7 +463,9 @@ class _FeedbackHomePageState extends State<FeedbackHomePage> {
       barrierDismissible: false,
       builder: (context) {
         Future.delayed(const Duration(seconds: 2), () {
-          Navigator.of(context).pop();
+          if (mounted) {
+            Navigator.of(context).pop();
+          }
         });
 
         return AlertDialog(
@@ -505,7 +520,7 @@ class ServiceCard extends StatelessWidget {
                         onPressed: onTap,
                         child: const Text('Give Feedback'),
                       ),
-                      SizedBox(width: 8),
+                      const SizedBox(width: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 8,
@@ -554,4 +569,3 @@ class CompletedService {
     required this.departmentName,
   });
 }
-// This class represents a completed service with its details.
